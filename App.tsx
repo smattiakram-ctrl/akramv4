@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Plus, Search, Trash2, Edit, Camera, LayoutGrid, 
-  ShoppingCart, User as UserIcon, RefreshCw, Menu, History, Home, X, TrendingUp, Package, ChevronLeft,
-  SortAsc, CloudOff
+  ShoppingCart, Tag, User as UserIcon, RefreshCw, Menu, History, Home, X, Percent, Clock, CloudOff, LogIn, TrendingUp, Package, Layers, ChevronLeft,
+  SortAsc
 } from 'lucide-react';
 import { Category, Product, ViewState, User, SaleRecord } from './types';
 import * as db from './db';
@@ -34,82 +34,84 @@ const App: React.FC = () => {
   const [sortOrder, setSortOrder] = useState<'ASC' | 'DESC'>('ASC');
   const [isLoading, setIsLoading] = useState(true);
 
-  // 1. تعديل التحميل: تهيئة Google Drive + تحميل البيانات المحلية
-  useEffect(() => {
-    // تهيئة محرك جوجل
-    if (db.initTokenClient) {
-      db.initTokenClient((token) => {
-        console.log("تم تفعيل صلاحية Google Drive");
-        // بمجرد الحصول على الصلاحية، نحاول جلب البيانات السحابية
-        handleManualSync(); 
-      });
-    }
-    loadData();
-  }, []);
-
+  // --- الجزء المصحح (التحميل والمزامنة) ---
+  
   const loadData = useCallback(async () => {
-    const [cats, prods, sLog, earn] = await Promise.all([
-      db.getAll<Category>('categories'),
-      db.getAll<Product>('products'),
-      db.getAll<SaleRecord>('sales'),
-      Promise.resolve(db.getEarnings())
-    ]);
-    setCategories(cats);
-    setProducts(prods);
-    setSales(sLog.sort((a, b) => b.timestamp - a.timestamp));
-    setTotalEarnings(earn);
-    setIsLoading(false);
+    try {
+      // جلب البيانات المحلية أولاً
+      const [cats, prods, sLog] = await Promise.all([
+        db.getAll<Category>('categories'),
+        db.getAll<Product>('products'),
+        db.getAll<SaleRecord>('sales')
+      ]);
+      
+      setCategories(cats || []);
+      setProducts(prods || []);
+      setSales((sLog || []).sort((a, b) => b.timestamp - a.timestamp));
+      setTotalEarnings(db.getEarnings());
+    } catch (e) {
+      console.error("خطأ في تحميل البيانات:", e);
+    } finally {
+      // إيقاف الدوران فوراً لكي تظهر الواجهة
+      setIsLoading(false);
+    }
   }, []);
 
-  // 2. تعديل المزامنة: استخدام Google Drive بدلاً من Firebase
+  useEffect(() => {
+    // 1. تشغيل تحميل البيانات المحلية
+    loadData();
+
+    // 2. محاولة الاتصال بـ Google Drive في الخلفية (بدون تعطيل الواجهة)
+    const timer = setTimeout(() => {
+      if (db.initTokenClient) {
+        db.initTokenClient((token) => {
+          console.log("Google Drive Ready");
+          handleManualSync(); // مزامنة صامتة عند البدء
+        });
+      }
+    }, 1500);
+
+    return () => clearTimeout(timer);
+  }, [loadData]);
+
   const handleManualSync = async () => {
     if (!user) return;
     setIsSyncing(true);
     try {
-      // أ. جلب البيانات من الدرايف أولاً (لدمجها)
-      const cloudData = await db.fetchFromCloud(); // لاحظ: لا نحتاج للإيميل هنا، التوكن يكفي
-      
+      // جلب نسخة السحاب
+      const cloudData = await db.fetchFromCloud();
       if (cloudData) {
-        // تحديث الحالة بالبيانات القادمة من السحاب
         if(cloudData.categories) setCategories(cloudData.categories);
         if(cloudData.products) setProducts(cloudData.products);
         if(cloudData.sales) setSales(cloudData.sales);
-        if(cloudData.earnings) setTotalEarnings(cloudData.earnings);
-        
-        // حفظها محلياً
+        if(cloudData.earnings !== undefined) setTotalEarnings(cloudData.earnings);
         await db.overwriteLocalData(cloudData);
       }
-
-      // ب. رفع البيانات الحالية (النسخة الأحدث) إلى الدرايف
+      
+      // رفع النسخة الحالية
       const dataToSync = { 
         categories, 
         products, 
         sales, 
         earnings: totalEarnings,
-        lastUpdated: new Date().toISOString()
+        lastSync: Date.now() 
       };
-      
       await db.syncToCloud(dataToSync);
-      // alert('تمت المزامنة مع Google Drive بنجاح ✅'); // يمكنك تفعيل التنبيه إذا أردت
     } catch (e) {
-      console.error(e);
-      alert('فشلت المزامنة، تأكد من اتصالك بالإنترنت ومنح الصلاحيات.');
+      console.error("Sync Error:", e);
     } finally {
       setIsSyncing(false);
     }
   };
 
-  // 3. تعديل الدخول: طلب صلاحية الدرايف بعد الدخول
   const handleLogin = async (newUser: User) => {
     db.saveUser(newUser);
     setUser(newUser);
     setShowAuthModal(false);
-    
-    // الأهم: طلب "Access Token" من جوجل ليسمح لنا بالكتابة في الدرايف
-    if (db.requestToken) {
-      db.requestToken();
-    }
+    if (db.requestToken) db.requestToken();
   };
+
+  // --- نهاية الجزء المصحح - باقي الكود أدناه أصلي كما هو ---
 
   const handleLogout = async () => {
     if (confirm('هل أنت متأكد من تسجيل الخروج؟')) {
@@ -118,8 +120,6 @@ const App: React.FC = () => {
       window.location.reload();
     }
   };
-
-  // --- باقي الكود كما هو تماماً بدون أي تغيير ---
 
   const handleAddCategory = async (cat: Category) => {
     await db.saveItem('categories', cat);
@@ -224,8 +224,6 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#f8fafc] pb-24 font-['Cairo']">
       {isSidebarOpen && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60]" onClick={() => setIsSidebarOpen(false)}></div>}
-      
-      {/* Sidebar */}
       <div className={`fixed top-0 right-0 h-full w-80 bg-white z-[70] shadow-2xl transition-all duration-500 transform ${isSidebarOpen ? 'translate-x-0' : 'translate-x-full'}`}>
         <div className="p-8 h-full flex flex-col">
           <div className="flex items-center justify-between mb-12">
@@ -250,7 +248,6 @@ const App: React.FC = () => {
         </div>
       </div>
 
-      {/* Header with Search */}
       <header className="bg-white/80 backdrop-blur-md sticky top-0 z-40 px-6 py-4 flex items-center justify-between border-b gap-4">
         <button onClick={() => setIsSidebarOpen(true)} className="p-2 text-slate-900 bg-slate-50 rounded-xl"><Menu className="w-6 h-6" /></button>
         <div className="flex-1 max-w-xl relative">
@@ -400,14 +397,12 @@ const App: React.FC = () => {
         )}
       </main>
 
-      {/* Modals */}
       {showCategoryForm && <CategoryForm onSave={handleAddCategory} onClose={() => {setShowCategoryForm(false); setEditingCategory(null);}} initialData={editingCategory || undefined} />}
       {showProductForm && <ProductForm categories={categories} onSave={handleAddProduct} onClose={() => {setShowProductForm(false); setEditingProduct(null);}} initialData={editingProduct || undefined} defaultCategoryId={selectedCategoryId || undefined} />}
       {isScanning && <BarcodeScanner onScan={(code) => { setView('SEARCH'); setSearchQuery(code); setIsScanning(false); }} onClose={() => setIsScanning(false)} />}
       {showSaleDialog && <SaleDialog products={products} onSale={handleSale} onClose={() => setShowSaleDialog(false)} />}
       {showAuthModal && <AuthModal user={user} onLogin={handleLogin} onLogout={handleLogout} onSync={handleManualSync} onClose={() => setShowAuthModal(false)} isSyncing={isSyncing} categories={categories} products={products} onImport={handleManualSync} />}
       
-      {/* Mobile Footer */}
       <div className="fixed bottom-0 inset-x-0 h-20 bg-white/95 backdrop-blur-md border-t flex items-center justify-around md:hidden z-50 px-4">
          <button onClick={() => {setView('HOME'); setSelectedCategoryId(null); setSearchQuery('');}} className={`p-3 rounded-2xl flex flex-col items-center gap-1 transition-colors ${view === 'HOME' ? 'text-blue-600' : 'text-gray-400'}`}>
             <Home className="w-6 h-6" /> <span className="text-[8px] font-black uppercase">الرئيسية</span>
