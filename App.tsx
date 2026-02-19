@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Plus, Search, Trash2, Edit, Camera, LayoutGrid, 
@@ -34,92 +35,95 @@ const App: React.FC = () => {
   const [sortOrder, setSortOrder] = useState<'ASC' | 'DESC'>('ASC');
   const [isLoading, setIsLoading] = useState(true);
 
+  // تحميل البيانات
   const loadData = useCallback(async () => {
-    try {
-      const [cats, prods, sLog] = await Promise.all([
-        db.getAll<Category>('categories'),
-        db.getAll<Product>('products'),
-        db.getAll<SaleRecord>('sales')
-      ]);
-      
-      setCategories(cats || []);
-      setProducts(prods || []);
-      setSales((sLog || []).sort((a, b) => b.timestamp - a.timestamp));
-      setTotalEarnings(db.getEarnings());
-    } catch (e) {
-      console.error("Error loading data:", e);
-    } finally {
+    if (!user) {
       setIsLoading(false);
+      return;
     }
-  }, []);
+    const [cats, prods, sLog, earn] = await Promise.all([
+      db.getAll<Category>('categories'),
+      db.getAll<Product>('products'),
+      db.getAll<SaleRecord>('sales'),
+      Promise.resolve(db.getEarnings())
+    ]);
+    setCategories(cats);
+    setProducts(prods);
+    setSales(sLog.sort((a, b) => b.timestamp - a.timestamp));
+    setTotalEarnings(earn);
+    setIsLoading(false);
+  }, [user]);
 
   useEffect(() => {
     loadData();
-    const timer = setTimeout(() => {
-      if (db.initTokenClient) {
-        db.initTokenClient(() => {
-          handleManualSync();
-        });
-      }
-    }, 1500);
-    return () => clearTimeout(timer);
   }, [loadData]);
 
+  // إصلاح المزامنة اليدوية
   const handleManualSync = async () => {
     if (!user) return;
     setIsSyncing(true);
     try {
-      const cloudData = await db.fetchFromCloud();
+      // محاكاة الاتصال بـ Firebase
+      await db.syncToCloud(user.email, { categories, products, sales, earnings: totalEarnings });
+      
+      // جلب البيانات الأحدث (في حال وجود أجهزة أخرى)
+      const cloudData = await db.fetchFromCloud(user.email);
       if (cloudData) {
-        if(cloudData.categories) setCategories(cloudData.categories);
-        if(cloudData.products) setProducts(cloudData.products);
-        if(cloudData.sales) setSales(cloudData.sales);
-        if(cloudData.earnings !== undefined) setTotalEarnings(cloudData.earnings);
         await db.overwriteLocalData(cloudData);
+        await loadData();
       }
-      const dataToSync = { categories, products, sales, earnings: totalEarnings, lastSync: Date.now() };
-      await db.syncToCloud(dataToSync);
+      alert('تمت المزامنة مع Firebase بنجاح ✅');
     } catch (e) {
-      console.error("Sync Error:", e);
+      alert('فشلت المزامنة، تأكد من اتصالك بالإنترنت');
     } finally {
       setIsSyncing(false);
+    }
+  };
+
+  // إصلاح تسجيل الخروج الجذري
+  const handleLogout = async () => {
+    if (confirm('هل أنت متأكد من تسجيل الخروج؟ سيتم مسح بيانات الجلسة الحالية.')) {
+      try {
+        await db.logoutUser();
+        setUser(null);
+        // التصفير الفوري للحالة
+        setCategories([]);
+        setProducts([]);
+        setSales([]);
+        // إعادة التوجيه والتحميل لضمان نظافة التطبيق
+        window.location.reload();
+      } catch (err) {
+        // في حال فشل أي شيء، امسح كل شيء يدوياً
+        localStorage.clear();
+        window.location.reload();
+      }
     }
   };
 
   const handleLogin = async (newUser: User) => {
     db.saveUser(newUser);
     setUser(newUser);
+    setIsLoading(true);
+    const cloudData = await db.fetchFromCloud(newUser.email);
+    if (cloudData) {
+      await db.overwriteLocalData(cloudData);
+    }
+    await loadData();
     setShowAuthModal(false);
-    if (db.requestToken) db.requestToken();
   };
 
-  const handleLogout = async () => {
-    if (confirm('هل أنت متأكد من تسجيل الخروج؟')) {
-      await db.logoutUser();
-      setUser(null);
-      window.location.reload();
-    }
+  const handleAddCategory = async (cat: Category) => {
+    await db.saveItem('categories', cat);
+    setCategories(prev => [...prev.filter(c => c.id !== cat.id), cat]);
+    setShowCategoryForm(false);
   };
 
   const handleAddProduct = async (prod: Product) => {
-    try {
-      // 1. تحديث القائمة فوراً في الشاشة
-      setProducts(prev => {
-        const filtered = prev.filter(p => p.id !== prod.id);
-        return [...filtered, prod];
-      });
-
-      // 2. إغلاق النافذة فوراً
-      setShowProductForm(false);
-      setEditingProduct(null);
-
-      // 3. الحفظ في قاعدة البيانات والمزامنة في الخلفية
-      await db.saveItem('products', prod);
-      handleManualSync();
-    } catch (error) {
-      console.error("خطأ في الحفظ:", error);
-    }
+    await db.saveItem('products', prod);
+    setProducts(prev => [...prev.filter(p => p.id !== prod.id), prod]);
+    setShowProductForm(false);
   };
+
   const handleSale = async (productId: string, qty: number, price: number) => {
     const product = products.find(p => p.id === productId);
     if (!product) return;
@@ -133,29 +137,7 @@ const App: React.FC = () => {
       timestamp: Date.now()
     };
     await db.saveItem('sales', sale);
-    const newEarnings = totalEarnings + (pric  const handleAddCategory = async (cat: Category) => {
-    try {
-      // حفظ في القائمة المحلية فوراً لتظهر للمستخدم
-      setCategories(prev => {
-        const filtered = prev.filter(c => c.id !== cat.id);
-        return [...filtered, cat];
-      });
-      
-      // حفظ في قاعدة البيانات (IndexedDB)
-      await db.saveItem('categories', cat);
-      
-      // إغلاق النافذة
-      setShowCategoryForm(false);
-      setEditingCategory(null);
-
-      // تشغيل المزامنة مع السحاب في الخلفية
-      handleManualSync();
-    } catch (error) {
-      console.error("خطأ أثناء حفظ الصنف:", error);
-      alert("تعذر الحفظ، يرجى المحاولة مرة أخرى");
-    }
-  };
-e * qty);
+    const newEarnings = totalEarnings + (price * qty);
     db.saveEarnings(newEarnings);
     setTotalEarnings(newEarnings);
     setSales(prev => [sale, ...prev]);
@@ -170,7 +152,6 @@ e * qty);
       setProducts(prev => prev.map(p => p.id === productId ? updatedProd : p));
     }
     setShowSaleDialog(false);
-    handleManualSync();
   };
 
   const handleDeleteProduct = async (e: React.MouseEvent, id: string) => {
@@ -178,7 +159,6 @@ e * qty);
     if (confirm('حذف السلعة؟')) {
       await db.deleteItem('products', id);
       setProducts(prev => prev.filter(p => p.id !== id));
-      handleManualSync();
     }
   };
 
@@ -191,7 +171,6 @@ e * qty);
       setCategories(prev => prev.filter(c => c.id !== id));
       setProducts(prev => prev.filter(p => p.categoryId !== id));
       if (selectedCategoryId === id) setView('HOME');
-      handleManualSync();
     }
   };
 
@@ -222,7 +201,7 @@ e * qty);
           <div className="bg-white/5 backdrop-blur-xl p-10 rounded-[4rem] border border-white/10 mb-10 shadow-2xl">
             <Package className="w-16 h-16 text-white mx-auto mb-6" />
             <h1 className="text-4xl font-black text-white mb-3 tracking-tighter">NABIL Cloud</h1>
-            <p className="text-gray-400 font-medium">مخزنك سحابي بالكامل مع Google Drive. آمن، سريع، ومتاح من أي جهاز.</p>
+            <p className="text-gray-400 font-medium">مخزنك سحابي بالكامل مع Firebase. آمن، سريع، ومتاح من أي جهاز.</p>
           </div>
           <button onClick={() => setShowAuthModal(true)} className="w-full bg-white text-blue-900 py-6 rounded-3xl font-black text-xl shadow-2xl active:scale-95 transition-all">
             تسجيل الدخول للبدء
@@ -251,7 +230,7 @@ e * qty);
           <div className="pt-8 border-t space-y-4">
              <div className="bg-slate-900 p-6 rounded-[2.5rem] text-white">
                 <div className="flex items-center gap-3">
-                  <img src={user.picture} className="w-10 h-10 rounded-full border-2 border-white/20" alt="" />
+                  <img src={user.picture} className="w-10 h-10 rounded-full border-2 border-white/20" />
                   <span className="font-bold truncate text-sm">{user.name}</span>
                 </div>
              </div>
@@ -262,6 +241,7 @@ e * qty);
         </div>
       </div>
 
+      {/* Header with Search */}
       <header className="bg-white/80 backdrop-blur-md sticky top-0 z-40 px-6 py-4 flex items-center justify-between border-b gap-4">
         <button onClick={() => setIsSidebarOpen(true)} className="p-2 text-slate-900 bg-slate-50 rounded-xl"><Menu className="w-6 h-6" /></button>
         <div className="flex-1 max-w-xl relative">
@@ -279,7 +259,7 @@ e * qty);
           />
         </div>
         <button onClick={() => setShowAuthModal(true)} className="w-10 h-10 rounded-xl overflow-hidden ring-2 ring-blue-50 shadow-sm active:scale-95">
-          <img src={user.picture} className="w-full h-full object-cover" alt="" />
+          <img src={user.picture} className="w-full h-full object-cover" />
         </button>
       </header>
 
@@ -315,35 +295,41 @@ e * qty);
 
              <div className="space-y-6">
                 <h3 className="text-xl font-black text-slate-900">{searchQuery ? 'نتائج البحث' : 'أصناف المخزن'}</h3>
-                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-6">
-                  {searchQuery ? filteredProducts.map(p => (
-                    <div key={p.id} className="bg-white rounded-[2.5rem] border shadow-sm overflow-hidden flex flex-col group hover:shadow-xl transition-all">
-                      <div className="aspect-square relative overflow-hidden bg-slate-50">
-                        <img src={p.image} className="w-full h-full object-cover" alt="" />
-                        <div className="absolute bottom-3 right-3 bg-blue-600 text-white text-[10px] px-4 py-1.5 rounded-full font-black">{p.quantity} قطعة</div>
-                      </div>
-                      <div className="p-6 flex-1">
-                        <h4 className="font-black text-slate-900 mb-2 truncate text-sm">{p.name}</h4>
-                        <div className="text-xl font-black text-blue-700 mb-6">{p.price.split('/')[0]} <span className="text-[10px]">د.ج</span></div>
-                        <div className="flex gap-2">
-                          <button onClick={() => { setEditingProduct(p); setShowProductForm(true); }} className="p-3 bg-blue-50 text-blue-500 rounded-2xl flex-1 flex justify-center"><Edit className="w-5 h-5" /></button>
-                          <button onClick={(e) => handleDeleteProduct(e, p.id)} className="p-3 bg-red-50 text-red-500 rounded-2xl flex-1 flex justify-center"><Trash2 className="w-5 h-5" /></button>
+                {searchQuery ? (
+                  <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
+                    {filteredProducts.map(p => (
+                      <div key={p.id} className="bg-white rounded-[2.5rem] border shadow-sm overflow-hidden flex flex-col group hover:shadow-xl transition-all">
+                        <div className="aspect-square relative overflow-hidden bg-slate-50">
+                          <img src={p.image} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                          <div className="absolute bottom-3 right-3 bg-blue-600 text-white text-[10px] px-4 py-1.5 rounded-full font-black">{p.quantity} قطعة</div>
+                        </div>
+                        <div className="p-6 flex-1">
+                          <h4 className="font-black text-slate-900 mb-2 truncate text-sm">{p.name}</h4>
+                          <div className="text-xl font-black text-blue-700 mb-6">{p.price.split('/')[0]} <span className="text-[10px]">د.ج</span></div>
+                          <div className="flex gap-2">
+                            <button onClick={() => { setEditingProduct(p); setShowProductForm(true); }} className="p-3 bg-blue-50 text-blue-500 rounded-2xl flex-1 flex justify-center"><Edit className="w-5 h-5" /></button>
+                            <button onClick={(e) => handleDeleteProduct(e, p.id)} className="p-3 bg-red-50 text-red-500 rounded-2xl flex-1 flex justify-center"><Trash2 className="w-5 h-5" /></button>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  )) : categories.map(c => (
-                    <div key={c.id} className="group bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden hover:shadow-xl transition-all cursor-pointer" onClick={() => { setSelectedCategoryId(c.id); setView('CATEGORY_DETAIL'); }}>
-                      <div className="aspect-square relative overflow-hidden">
-                        <button onClick={(e) => handleDeleteCategory(e, c.id)} className="absolute top-3 left-3 z-10 p-2 bg-red-50/80 backdrop-blur-sm text-red-500 rounded-full opacity-0 group-hover:opacity-100 hover:bg-red-500 hover:text-white transition-all"><Trash2 className="w-4 h-4" /></button>
-                        <img src={c.image} className="w-full h-full object-cover group-hover:scale-110 transition-transform" alt="" />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-6">
+                    {categories.map(c => (
+                      <div key={c.id} className="group bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden hover:shadow-xl transition-all cursor-pointer" onClick={() => { setSelectedCategoryId(c.id); setView('CATEGORY_DETAIL'); }}>
+                        <div className="aspect-square relative overflow-hidden">
+                          <button onClick={(e) => handleDeleteCategory(e, c.id)} className="absolute top-3 left-3 z-10 p-2 bg-red-50/80 backdrop-blur-sm text-red-500 rounded-full opacity-0 group-hover:opacity-100 hover:bg-red-500 hover:text-white transition-all"><Trash2 className="w-4 h-4" /></button>
+                          <img src={c.image} className="w-full h-full object-cover group-hover:scale-110 transition-transform" />
+                        </div>
+                        <div className="p-5 text-center">
+                          <p className="font-black text-slate-800 text-sm truncate">{c.name}</p>
+                          <p className="text-[10px] text-slate-400 font-bold mt-1">{products.filter(p => p.categoryId === c.id).length} سلع</p>
+                        </div>
                       </div>
-                      <div className="p-5 text-center">
-                        <p className="font-black text-slate-800 text-sm truncate">{c.name}</p>
-                        <p className="text-[10px] text-slate-400 font-bold mt-1">{products.filter(p => p.categoryId === c.id).length} سلع</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
              </div>
           </div>
         )}
@@ -357,7 +343,7 @@ e * qty);
             {sales.map(s => (
               <div key={s.id} className="bg-white p-6 rounded-[2.5rem] border shadow-sm flex items-center justify-between hover:border-orange-200 transition-colors">
                 <div className="flex items-center gap-6">
-                  <img src={s.productImage} className="w-16 h-16 rounded-2xl object-cover border" alt="" />
+                  <img src={s.productImage} className="w-16 h-16 rounded-2xl object-cover border" />
                   <div>
                     <h4 className="font-black text-slate-900">{s.productName}</h4>
                     <span className="text-[10px] text-slate-400 font-black"><Clock className="w-3 h-3 inline" /> {new Date(s.timestamp).toLocaleTimeString('ar-DZ')}</span>
@@ -387,7 +373,7 @@ e * qty);
               {filteredProducts.map(p => (
                 <div key={p.id} className="bg-white rounded-[2.5rem] border shadow-sm overflow-hidden flex flex-col group hover:shadow-xl transition-all">
                   <div className="aspect-square relative overflow-hidden bg-slate-50">
-                    <img src={p.image} className="w-full h-full object-cover group-hover:scale-105 transition-transform" alt="" />
+                    <img src={p.image} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
                     <div className="absolute bottom-3 right-3 bg-blue-600 text-white text-[10px] px-4 py-1.5 rounded-full font-black shadow-lg shadow-blue-900/20">{p.quantity} قطعة</div>
                   </div>
                   <div className="p-6 flex-1">
@@ -405,6 +391,7 @@ e * qty);
         )}
       </main>
 
+      {/* Modals */}
       {showCategoryForm && <CategoryForm onSave={handleAddCategory} onClose={() => {setShowCategoryForm(false); setEditingCategory(null);}} initialData={editingCategory || undefined} />}
       {showProductForm && <ProductForm categories={categories} onSave={handleAddProduct} onClose={() => {setShowProductForm(false); setEditingProduct(null);}} initialData={editingProduct || undefined} defaultCategoryId={selectedCategoryId || undefined} />}
       {isScanning && <BarcodeScanner onScan={(code) => { setView('SEARCH'); setSearchQuery(code); setIsScanning(false); }} onClose={() => setIsScanning(false)} />}
