@@ -34,11 +34,8 @@ const App: React.FC = () => {
   const [sortOrder, setSortOrder] = useState<'ASC' | 'DESC'>('ASC');
   const [isLoading, setIsLoading] = useState(true);
 
-  // --- الجزء المصحح (التحميل والمزامنة) ---
-  
   const loadData = useCallback(async () => {
     try {
-      // جلب البيانات المحلية أولاً
       const [cats, prods, sLog] = await Promise.all([
         db.getAll<Category>('categories'),
         db.getAll<Product>('products'),
@@ -52,25 +49,19 @@ const App: React.FC = () => {
     } catch (e) {
       console.error("خطأ في تحميل البيانات:", e);
     } finally {
-      // إيقاف الدوران فوراً لكي تظهر الواجهة
       setIsLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    // 1. تشغيل تحميل البيانات المحلية
     loadData();
-
-    // 2. محاولة الاتصال بـ Google Drive في الخلفية (بدون تعطيل الواجهة)
     const timer = setTimeout(() => {
       if (db.initTokenClient) {
         db.initTokenClient((token) => {
-          console.log("Google Drive Ready");
-          handleManualSync(); // مزامنة صامتة عند البدء
+          handleManualSync();
         });
       }
     }, 1500);
-
     return () => clearTimeout(timer);
   }, [loadData]);
 
@@ -78,7 +69,6 @@ const App: React.FC = () => {
     if (!user) return;
     setIsSyncing(true);
     try {
-      // جلب نسخة السحاب
       const cloudData = await db.fetchFromCloud();
       if (cloudData) {
         if(cloudData.categories) setCategories(cloudData.categories);
@@ -87,15 +77,7 @@ const App: React.FC = () => {
         if(cloudData.earnings !== undefined) setTotalEarnings(cloudData.earnings);
         await db.overwriteLocalData(cloudData);
       }
-      
-      // رفع النسخة الحالية
-      const dataToSync = { 
-        categories, 
-        products, 
-        sales, 
-        earnings: totalEarnings,
-        lastSync: Date.now() 
-      };
+      const dataToSync = { categories, products, sales, earnings: totalEarnings, lastSync: Date.now() };
       await db.syncToCloud(dataToSync);
     } catch (e) {
       console.error("Sync Error:", e);
@@ -111,8 +93,6 @@ const App: React.FC = () => {
     if (db.requestToken) db.requestToken();
   };
 
-  // --- نهاية الجزء المصحح - باقي الكود أدناه أصلي كما هو ---
-
   const handleLogout = async () => {
     if (confirm('هل أنت متأكد من تسجيل الخروج؟')) {
       await db.logoutUser();
@@ -121,16 +101,30 @@ const App: React.FC = () => {
     }
   };
 
+  // --- تم إصلاح هذه الدالة لتعمل فوراً ---
   const handleAddCategory = async (cat: Category) => {
     await db.saveItem('categories', cat);
-    setCategories(prev => [...prev.filter(c => c.id !== cat.id), cat]);
+    setCategories(prev => {
+      const existing = prev.find(c => c.id === cat.id);
+      if (existing) return prev.map(c => c.id === cat.id ? cat : c);
+      return [...prev, cat];
+    });
     setShowCategoryForm(false);
+    setEditingCategory(null);
+    handleManualSync(); // مزامنة في الخلفية
   };
 
+  // --- تم إصلاح هذه الدالة لتعمل فوراً ---
   const handleAddProduct = async (prod: Product) => {
     await db.saveItem('products', prod);
-    setProducts(prev => [...prev.filter(p => p.id !== prod.id), prod]);
+    setProducts(prev => {
+      const existing = prev.find(p => p.id === prod.id);
+      if (existing) return prev.map(p => p.id === prod.id ? prod : p);
+      return [...prev, prod];
+    });
     setShowProductForm(false);
+    setEditingProduct(null);
+    handleManualSync(); // مزامنة في الخلفية
   };
 
   const handleSale = async (productId: string, qty: number, price: number) => {
@@ -161,6 +155,7 @@ const App: React.FC = () => {
       setProducts(prev => prev.map(p => p.id === productId ? updatedProd : p));
     }
     setShowSaleDialog(false);
+    handleManualSync();
   };
 
   const handleDeleteProduct = async (e: React.MouseEvent, id: string) => {
@@ -168,6 +163,7 @@ const App: React.FC = () => {
     if (confirm('حذف السلعة؟')) {
       await db.deleteItem('products', id);
       setProducts(prev => prev.filter(p => p.id !== id));
+      handleManualSync();
     }
   };
 
@@ -180,6 +176,7 @@ const App: React.FC = () => {
       setCategories(prev => prev.filter(c => c.id !== id));
       setProducts(prev => prev.filter(p => p.categoryId !== id));
       if (selectedCategoryId === id) setView('HOME');
+      handleManualSync();
     }
   };
 
@@ -366,56 +363,4 @@ const App: React.FC = () => {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-4">
                 <button onClick={() => { setView('HOME'); setSelectedCategoryId(null); }} className="p-3 bg-white rounded-2xl shadow-sm"><ChevronLeft className="w-6 h-6 rotate-180" /></button>
-                <h2 className="text-2xl font-black text-slate-900">{categories.find(c => c.id === selectedCategoryId)?.name}</h2>
-              </div>
-              <div className="flex gap-2">
-                <button onClick={() => setShowProductForm(true)} className="bg-blue-600 text-white px-5 py-3 rounded-2xl font-black text-sm flex items-center gap-2 shadow-lg active:scale-95 transition">
-                  <Plus className="w-5 h-5" /> إضافة سلعة هنا
-                </button>
-                <button onClick={() => setSortOrder(prev => prev === 'ASC' ? 'DESC' : 'ASC')} className="p-4 bg-white rounded-2xl border text-slate-600"><SortAsc className={`w-6 h-6 ${sortOrder === 'DESC' ? 'rotate-180' : ''}`} /></button>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
-              {filteredProducts.map(p => (
-                <div key={p.id} className="bg-white rounded-[2.5rem] border shadow-sm overflow-hidden flex flex-col group hover:shadow-xl transition-all">
-                  <div className="aspect-square relative overflow-hidden bg-slate-50">
-                    <img src={p.image} className="w-full h-full object-cover group-hover:scale-105 transition-transform" alt="" />
-                    <div className="absolute bottom-3 right-3 bg-blue-600 text-white text-[10px] px-4 py-1.5 rounded-full font-black shadow-lg shadow-blue-900/20">{p.quantity} قطعة</div>
-                  </div>
-                  <div className="p-6 flex-1">
-                    <h4 className="font-black text-slate-900 mb-2 truncate text-sm">{p.name}</h4>
-                    <div className="text-xl font-black text-blue-700 mb-6">{p.price.split('/')[0]} <span className="text-[10px]">د.ج</span></div>
-                    <div className="flex gap-2">
-                      <button onClick={() => { setEditingProduct(p); setShowProductForm(true); }} className="p-3 bg-blue-50 text-blue-500 rounded-2xl flex-1 flex justify-center hover:bg-blue-500 hover:text-white transition-all"><Edit className="w-5 h-5" /></button>
-                      <button onClick={(e) => handleDeleteProduct(e, p.id)} className="p-3 bg-red-50 text-red-500 rounded-2xl flex-1 flex justify-center hover:bg-red-500 hover:text-white transition-all"><Trash2 className="w-5 h-5" /></button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </main>
-
-      {showCategoryForm && <CategoryForm onSave={handleAddCategory} onClose={() => {setShowCategoryForm(false); setEditingCategory(null);}} initialData={editingCategory || undefined} />}
-      {showProductForm && <ProductForm categories={categories} onSave={handleAddProduct} onClose={() => {setShowProductForm(false); setEditingProduct(null);}} initialData={editingProduct || undefined} defaultCategoryId={selectedCategoryId || undefined} />}
-      {isScanning && <BarcodeScanner onScan={(code) => { setView('SEARCH'); setSearchQuery(code); setIsScanning(false); }} onClose={() => setIsScanning(false)} />}
-      {showSaleDialog && <SaleDialog products={products} onSale={handleSale} onClose={() => setShowSaleDialog(false)} />}
-      {showAuthModal && <AuthModal user={user} onLogin={handleLogin} onLogout={handleLogout} onSync={handleManualSync} onClose={() => setShowAuthModal(false)} isSyncing={isSyncing} categories={categories} products={products} onImport={handleManualSync} />}
-      
-      <div className="fixed bottom-0 inset-x-0 h-20 bg-white/95 backdrop-blur-md border-t flex items-center justify-around md:hidden z-50 px-4">
-         <button onClick={() => {setView('HOME'); setSelectedCategoryId(null); setSearchQuery('');}} className={`p-3 rounded-2xl flex flex-col items-center gap-1 transition-colors ${view === 'HOME' ? 'text-blue-600' : 'text-gray-400'}`}>
-            <Home className="w-6 h-6" /> <span className="text-[8px] font-black uppercase">الرئيسية</span>
-         </button>
-         <button onClick={() => setShowSaleDialog(true)} className="w-14 h-14 bg-orange-500 text-white rounded-3xl shadow-xl shadow-orange-200 flex items-center justify-center -translate-y-6 border-4 border-[#f8fafc] active:scale-90 transition transform">
-            <ShoppingCart className="w-7 h-7" />
-         </button>
-         <button onClick={() => setView('SALES_LOG')} className={`p-3 rounded-2xl flex flex-col items-center gap-1 transition-colors ${view === 'SALES_LOG' ? 'text-orange-600' : 'text-gray-400'}`}>
-            <History className="w-6 h-6" /> <span className="text-[8px] font-black uppercase">السجل</span>
-         </button>
-      </div>
-    </div>
-  );
-};
-
-export default App;
+  
