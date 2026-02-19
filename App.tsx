@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   Plus, Search, Trash2, Edit, Camera, LayoutGrid, 
@@ -35,80 +34,59 @@ const App: React.FC = () => {
   const [sortOrder, setSortOrder] = useState<'ASC' | 'DESC'>('ASC');
   const [isLoading, setIsLoading] = useState(true);
 
-  // تحميل البيانات
   const loadData = useCallback(async () => {
-    if (!user) {
-      setIsLoading(false);
-      return;
-    }
-    const [cats, prods, sLog, earn] = await Promise.all([
+    const [cats, prods, sLog] = await Promise.all([
       db.getAll<Category>('categories'),
       db.getAll<Product>('products'),
-      db.getAll<SaleRecord>('sales'),
-      Promise.resolve(db.getEarnings())
+      db.getAll<SaleRecord>('sales')
     ]);
-    setCategories(cats);
-    setProducts(prods);
-    setSales(sLog.sort((a, b) => b.timestamp - a.timestamp));
-    setTotalEarnings(earn);
+    setCategories(cats || []);
+    setProducts(prods || []);
+    setSales((sLog || []).sort((a, b) => b.timestamp - a.timestamp));
+    setTotalEarnings(db.getEarnings());
     setIsLoading(false);
-  }, [user]);
+  }, []);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
 
-  // إصلاح المزامنة اليدوية
+  // المزامنة مع Google Drive
   const handleManualSync = async () => {
     if (!user) return;
     setIsSyncing(true);
     try {
-      // محاكاة الاتصال بـ Firebase
-      await db.syncToCloud(user.email, { categories, products, sales, earnings: totalEarnings });
+      const dataToSync = { categories, products, sales, earnings: totalEarnings };
+      await db.syncToCloud(dataToSync);
       
-      // جلب البيانات الأحدث (في حال وجود أجهزة أخرى)
-      const cloudData = await db.fetchFromCloud(user.email);
+      const cloudData = await db.fetchFromCloud();
       if (cloudData) {
         await db.overwriteLocalData(cloudData);
         await loadData();
       }
-      alert('تمت المزامنة مع Firebase بنجاح ✅');
     } catch (e) {
-      alert('فشلت المزامنة، تأكد من اتصالك بالإنترنت');
+      console.error("Sync Error:", e);
     } finally {
       setIsSyncing(false);
     }
   };
 
-  // إصلاح تسجيل الخروج الجذري
   const handleLogout = async () => {
-    if (confirm('هل أنت متأكد من تسجيل الخروج؟ سيتم مسح بيانات الجلسة الحالية.')) {
-      try {
-        await db.logoutUser();
-        setUser(null);
-        // التصفير الفوري للحالة
-        setCategories([]);
-        setProducts([]);
-        setSales([]);
-        // إعادة التوجيه والتحميل لضمان نظافة التطبيق
-        window.location.reload();
-      } catch (err) {
-        // في حال فشل أي شيء، امسح كل شيء يدوياً
-        localStorage.clear();
-        window.location.reload();
-      }
+    if (confirm('هل أنت متأكد من تسجيل الخروج؟')) {
+      await db.logoutUser();
+      setUser(null);
+      window.location.reload();
     }
   };
 
   const handleLogin = async (newUser: User) => {
     db.saveUser(newUser);
     setUser(newUser);
-    setIsLoading(true);
-    const cloudData = await db.fetchFromCloud(newUser.email);
+    const cloudData = await db.fetchFromCloud();
     if (cloudData) {
       await db.overwriteLocalData(cloudData);
+      await loadData();
     }
-    await loadData();
     setShowAuthModal(false);
   };
 
@@ -116,12 +94,14 @@ const App: React.FC = () => {
     await db.saveItem('categories', cat);
     setCategories(prev => [...prev.filter(c => c.id !== cat.id), cat]);
     setShowCategoryForm(false);
+    handleManualSync(); // حفظ تلقائي في السحاب
   };
 
   const handleAddProduct = async (prod: Product) => {
     await db.saveItem('products', prod);
     setProducts(prev => [...prev.filter(p => p.id !== prod.id), prod]);
     setShowProductForm(false);
+    handleManualSync(); // حفظ تلقائي في السحاب
   };
 
   const handleSale = async (productId: string, qty: number, price: number) => {
@@ -152,6 +132,7 @@ const App: React.FC = () => {
       setProducts(prev => prev.map(p => p.id === productId ? updatedProd : p));
     }
     setShowSaleDialog(false);
+    handleManualSync(); // تحديث السحاب بعد البيع
   };
 
   const handleDeleteProduct = async (e: React.MouseEvent, id: string) => {
@@ -159,6 +140,7 @@ const App: React.FC = () => {
     if (confirm('حذف السلعة؟')) {
       await db.deleteItem('products', id);
       setProducts(prev => prev.filter(p => p.id !== id));
+      handleManualSync(); // تحديث السحاب
     }
   };
 
@@ -171,6 +153,7 @@ const App: React.FC = () => {
       setCategories(prev => prev.filter(c => c.id !== id));
       setProducts(prev => prev.filter(p => p.categoryId !== id));
       if (selectedCategoryId === id) setView('HOME');
+      handleManualSync(); // تحديث السحاب
     }
   };
 
@@ -183,7 +166,7 @@ const App: React.FC = () => {
       const q = searchQuery.toLowerCase();
       list = list.filter(p => p.name.toLowerCase().includes(q) || p.barcode.includes(q));
     }
-    return list.sort((a, b) => sortOrder === 'ASC' ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name));
+    return [...list].sort((a, b) => sortOrder === 'ASC' ? a.name.localeCompare(b.name) : b.name.localeCompare(a.name));
   }, [products, view, selectedCategoryId, searchQuery, sortOrder]);
 
   const inventoryValue = useMemo(() => {
@@ -201,13 +184,13 @@ const App: React.FC = () => {
           <div className="bg-white/5 backdrop-blur-xl p-10 rounded-[4rem] border border-white/10 mb-10 shadow-2xl">
             <Package className="w-16 h-16 text-white mx-auto mb-6" />
             <h1 className="text-4xl font-black text-white mb-3 tracking-tighter">NABIL Cloud</h1>
-            <p className="text-gray-400 font-medium">مخزنك سحابي بالكامل مع Firebase. آمن، سريع، ومتاح من أي جهاز.</p>
+            <p className="text-gray-400 font-medium">مخزنك سحابي بالكامل مع Google Drive. آمن، سريع، ومتاح من أي جهاز.</p>
           </div>
           <button onClick={() => setShowAuthModal(true)} className="w-full bg-white text-blue-900 py-6 rounded-3xl font-black text-xl shadow-2xl active:scale-95 transition-all">
             تسجيل الدخول للبدء
           </button>
         </div>
-        {showAuthModal && <AuthModal user={null} onLogin={handleLogin} onLogout={() => {}} onSync={() => {}} onClose={() => setShowAuthModal(false)} isSyncing={false} categories={[]} products={[]} onImport={() => {}} />}
+        {showAuthModal && <AuthModal user={null} onLogin={handleLogin} onLogout={() => {}} onSync={() => {}} onClose={() => setShowAuthModal(false)} isSyncing={false} categories={[]} products={[]} />}
       </div>
     );
   }
@@ -216,7 +199,6 @@ const App: React.FC = () => {
     <div className="min-h-screen bg-[#f8fafc] pb-24 font-['Cairo']">
       {isSidebarOpen && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60]" onClick={() => setIsSidebarOpen(false)}></div>}
       
-      {/* Sidebar */}
       <div className={`fixed top-0 right-0 h-full w-80 bg-white z-[70] shadow-2xl transition-all duration-500 transform ${isSidebarOpen ? 'translate-x-0' : 'translate-x-full'}`}>
         <div className="p-8 h-full flex flex-col">
           <div className="flex items-center justify-between mb-12">
@@ -230,7 +212,7 @@ const App: React.FC = () => {
           <div className="pt-8 border-t space-y-4">
              <div className="bg-slate-900 p-6 rounded-[2.5rem] text-white">
                 <div className="flex items-center gap-3">
-                  <img src={user.picture} className="w-10 h-10 rounded-full border-2 border-white/20" />
+                  <img src={user.picture} className="w-10 h-10 rounded-full border-2 border-white/20" alt="" />
                   <span className="font-bold truncate text-sm">{user.name}</span>
                 </div>
              </div>
@@ -241,7 +223,6 @@ const App: React.FC = () => {
         </div>
       </div>
 
-      {/* Header with Search */}
       <header className="bg-white/80 backdrop-blur-md sticky top-0 z-40 px-6 py-4 flex items-center justify-between border-b gap-4">
         <button onClick={() => setIsSidebarOpen(true)} className="p-2 text-slate-900 bg-slate-50 rounded-xl"><Menu className="w-6 h-6" /></button>
         <div className="flex-1 max-w-xl relative">
@@ -259,7 +240,7 @@ const App: React.FC = () => {
           />
         </div>
         <button onClick={() => setShowAuthModal(true)} className="w-10 h-10 rounded-xl overflow-hidden ring-2 ring-blue-50 shadow-sm active:scale-95">
-          <img src={user.picture} className="w-full h-full object-cover" />
+          <img src={user.picture} className="w-full h-full object-cover" alt="" />
         </button>
       </header>
 
@@ -300,7 +281,7 @@ const App: React.FC = () => {
                     {filteredProducts.map(p => (
                       <div key={p.id} className="bg-white rounded-[2.5rem] border shadow-sm overflow-hidden flex flex-col group hover:shadow-xl transition-all">
                         <div className="aspect-square relative overflow-hidden bg-slate-50">
-                          <img src={p.image} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                          <img src={p.image} className="w-full h-full object-cover group-hover:scale-105 transition-transform" alt="" />
                           <div className="absolute bottom-3 right-3 bg-blue-600 text-white text-[10px] px-4 py-1.5 rounded-full font-black">{p.quantity} قطعة</div>
                         </div>
                         <div className="p-6 flex-1">
@@ -320,7 +301,7 @@ const App: React.FC = () => {
                       <div key={c.id} className="group bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden hover:shadow-xl transition-all cursor-pointer" onClick={() => { setSelectedCategoryId(c.id); setView('CATEGORY_DETAIL'); }}>
                         <div className="aspect-square relative overflow-hidden">
                           <button onClick={(e) => handleDeleteCategory(e, c.id)} className="absolute top-3 left-3 z-10 p-2 bg-red-50/80 backdrop-blur-sm text-red-500 rounded-full opacity-0 group-hover:opacity-100 hover:bg-red-500 hover:text-white transition-all"><Trash2 className="w-4 h-4" /></button>
-                          <img src={c.image} className="w-full h-full object-cover group-hover:scale-110 transition-transform" />
+                          <img src={c.image} className="w-full h-full object-cover group-hover:scale-110 transition-transform" alt="" />
                         </div>
                         <div className="p-5 text-center">
                           <p className="font-black text-slate-800 text-sm truncate">{c.name}</p>
@@ -343,7 +324,7 @@ const App: React.FC = () => {
             {sales.map(s => (
               <div key={s.id} className="bg-white p-6 rounded-[2.5rem] border shadow-sm flex items-center justify-between hover:border-orange-200 transition-colors">
                 <div className="flex items-center gap-6">
-                  <img src={s.productImage} className="w-16 h-16 rounded-2xl object-cover border" />
+                  <img src={s.productImage} className="w-16 h-16 rounded-2xl object-cover border" alt="" />
                   <div>
                     <h4 className="font-black text-slate-900">{s.productName}</h4>
                     <span className="text-[10px] text-slate-400 font-black"><Clock className="w-3 h-3 inline" /> {new Date(s.timestamp).toLocaleTimeString('ar-DZ')}</span>
@@ -373,7 +354,7 @@ const App: React.FC = () => {
               {filteredProducts.map(p => (
                 <div key={p.id} className="bg-white rounded-[2.5rem] border shadow-sm overflow-hidden flex flex-col group hover:shadow-xl transition-all">
                   <div className="aspect-square relative overflow-hidden bg-slate-50">
-                    <img src={p.image} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                    <img src={p.image} className="w-full h-full object-cover group-hover:scale-105 transition-transform" alt="" />
                     <div className="absolute bottom-3 right-3 bg-blue-600 text-white text-[10px] px-4 py-1.5 rounded-full font-black shadow-lg shadow-blue-900/20">{p.quantity} قطعة</div>
                   </div>
                   <div className="p-6 flex-1">
@@ -391,14 +372,12 @@ const App: React.FC = () => {
         )}
       </main>
 
-      {/* Modals */}
       {showCategoryForm && <CategoryForm onSave={handleAddCategory} onClose={() => {setShowCategoryForm(false); setEditingCategory(null);}} initialData={editingCategory || undefined} />}
       {showProductForm && <ProductForm categories={categories} onSave={handleAddProduct} onClose={() => {setShowProductForm(false); setEditingProduct(null);}} initialData={editingProduct || undefined} defaultCategoryId={selectedCategoryId || undefined} />}
       {isScanning && <BarcodeScanner onScan={(code) => { setView('SEARCH'); setSearchQuery(code); setIsScanning(false); }} onClose={() => setIsScanning(false)} />}
       {showSaleDialog && <SaleDialog products={products} onSale={handleSale} onClose={() => setShowSaleDialog(false)} />}
-      {showAuthModal && <AuthModal user={user} onLogin={handleLogin} onLogout={handleLogout} onSync={handleManualSync} onClose={() => setShowAuthModal(false)} isSyncing={isSyncing} categories={categories} products={products} onImport={handleManualSync} />}
+      {showAuthModal && <AuthModal user={user} onLogin={handleLogin} onLogout={handleLogout} onSync={handleManualSync} onClose={() => setShowAuthModal(false)} isSyncing={isSyncing} categories={categories} products={products} />}
       
-      {/* Mobile Footer */}
       <div className="fixed bottom-0 inset-x-0 h-20 bg-white/95 backdrop-blur-md border-t flex items-center justify-around md:hidden z-50 px-4">
          <button onClick={() => {setView('HOME'); setSelectedCategoryId(null); setSearchQuery('');}} className={`p-3 rounded-2xl flex flex-col items-center gap-1 transition-colors ${view === 'HOME' ? 'text-blue-600' : 'text-gray-400'}`}>
             <Home className="w-6 h-6" /> <span className="text-[8px] font-black uppercase">الرئيسية</span>
