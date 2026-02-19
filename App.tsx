@@ -34,7 +34,6 @@ const App: React.FC = () => {
   const [sortOrder, setSortOrder] = useState<'ASC' | 'DESC'>('ASC');
   const [isLoading, setIsLoading] = useState(true);
 
-  // تحميل البيانات الأولية
   const loadData = useCallback(async () => {
     try {
       const [cats, prods, sLog] = await Promise.all([
@@ -48,7 +47,7 @@ const App: React.FC = () => {
       setSales((sLog || []).sort((a, b) => b.timestamp - a.timestamp));
       setTotalEarnings(db.getEarnings());
     } catch (e) {
-      console.error("خطأ تحميل البيانات:", e);
+      console.error("Error loading data:", e);
     } finally {
       setIsLoading(false);
     }
@@ -102,23 +101,24 @@ const App: React.FC = () => {
     }
   };
 
-  // --- إصلاح الحفظ مع الحفاظ على التحديث الفوري ---
   const handleAddCategory = async (cat: Category) => {
     await db.saveItem('categories', cat);
     setCategories(prev => {
-      const filtered = prev.filter(c => c.id !== cat.id);
-      return [...filtered, cat];
+      const existing = prev.find(c => c.id === cat.id);
+      if (existing) return prev.map(c => c.id === cat.id ? cat : c);
+      return [...prev, cat];
     });
     setShowCategoryForm(false);
     setEditingCategory(null);
-    handleManualSync(); 
+    handleManualSync();
   };
 
   const handleAddProduct = async (prod: Product) => {
     await db.saveItem('products', prod);
     setProducts(prev => {
-      const filtered = prev.filter(p => p.id !== prod.id);
-      return [...filtered, prod];
+      const existing = prev.find(p => p.id === prod.id);
+      if (existing) return prev.map(p => p.id === prod.id ? prod : p);
+      return [...prev, prod];
     });
     setShowProductForm(false);
     setEditingProduct(null);
@@ -219,6 +219,8 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#f8fafc] pb-24 font-['Cairo']">
       {isSidebarOpen && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60]" onClick={() => setIsSidebarOpen(false)}></div>}
+      
+      {/* Sidebar */}
       <div className={`fixed top-0 right-0 h-full w-80 bg-white z-[70] shadow-2xl transition-all duration-500 transform ${isSidebarOpen ? 'translate-x-0' : 'translate-x-full'}`}>
         <div className="p-8 h-full flex flex-col">
           <div className="flex items-center justify-between mb-12">
@@ -351,13 +353,61 @@ const App: React.FC = () => {
         )}
 
         {view === 'CATEGORY_DETAIL' && (
-          <div className="space-y-8">
+          <div className="space-y-8 animate-in fade-in duration-500">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-4">
                 <button onClick={() => { setView('HOME'); setSelectedCategoryId(null); }} className="p-3 bg-white rounded-2xl shadow-sm"><ChevronLeft className="w-6 h-6 rotate-180" /></button>
                 <h2 className="text-2xl font-black text-slate-900">{categories.find(c => c.id === selectedCategoryId)?.name}</h2>
               </div>
-              <button onClick={() => setSortOrder(prev => prev === 'ASC' ? 'DESC' : 'ASC')} className="p-4 bg-white rounded-2xl border text-slate-600"><SortAsc className={`w-6 h-6 ${sortOrder === 'DESC' ? 'rotate-180' : ''}`} /></button>
+              <div className="flex gap-2">
+                <button onClick={() => setShowProductForm(true)} className="bg-blue-600 text-white px-5 py-3 rounded-2xl font-black text-sm flex items-center gap-2 shadow-lg active:scale-95 transition">
+                  <Plus className="w-5 h-5" /> إضافة سلعة هنا
+                </button>
+                <button onClick={() => setSortOrder(prev => prev === 'ASC' ? 'DESC' : 'ASC')} className="p-4 bg-white rounded-2xl border text-slate-600"><SortAsc className={`w-6 h-6 ${sortOrder === 'DESC' ? 'rotate-180' : ''}`} /></button>
+              </div>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
-              {filtered
+              {filteredProducts.map(p => (
+                <div key={p.id} className="bg-white rounded-[2.5rem] border shadow-sm overflow-hidden flex flex-col group hover:shadow-xl transition-all">
+                  <div className="aspect-square relative overflow-hidden bg-slate-50">
+                    <img src={p.image} className="w-full h-full object-cover group-hover:scale-105 transition-transform" alt="" />
+                    <div className="absolute bottom-3 right-3 bg-blue-600 text-white text-[10px] px-4 py-1.5 rounded-full font-black shadow-lg shadow-blue-900/20">{p.quantity} قطعة</div>
+                  </div>
+                  <div className="p-6 flex-1">
+                    <h4 className="font-black text-slate-900 mb-2 truncate text-sm">{p.name}</h4>
+                    <div className="text-xl font-black text-blue-700 mb-6">{p.price.split('/')[0]} <span className="text-[10px]">د.ج</span></div>
+                    <div className="flex gap-2">
+                      <button onClick={() => { setEditingProduct(p); setShowProductForm(true); }} className="p-3 bg-blue-50 text-blue-500 rounded-2xl flex-1 flex justify-center hover:bg-blue-500 hover:text-white transition-all"><Edit className="w-5 h-5" /></button>
+                      <button onClick={(e) => handleDeleteProduct(e, p.id)} className="p-3 bg-red-50 text-red-500 rounded-2xl flex-1 flex justify-center hover:bg-red-500 hover:text-white transition-all"><Trash2 className="w-5 h-5" /></button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </main>
+
+      {showCategoryForm && <CategoryForm onSave={handleAddCategory} onClose={() => {setShowCategoryForm(false); setEditingCategory(null);}} initialData={editingCategory || undefined} />}
+      {showProductForm && <ProductForm categories={categories} onSave={handleAddProduct} onClose={() => {setShowProductForm(false); setEditingProduct(null);}} initialData={editingProduct || undefined} defaultCategoryId={selectedCategoryId || undefined} />}
+      {isScanning && <BarcodeScanner onScan={(code) => { setView('SEARCH'); setSearchQuery(code); setIsScanning(false); }} onClose={() => setIsScanning(false)} />}
+      {showSaleDialog && <SaleDialog products={products} onSale={handleSale} onClose={() => setShowSaleDialog(false)} />}
+      {showAuthModal && <AuthModal user={user} onLogin={handleLogin} onLogout={handleLogout} onSync={handleManualSync} onClose={() => setShowAuthModal(false)} isSyncing={isSyncing} categories={categories} products={products} onImport={handleManualSync} />}
+      
+      {/* Mobile Footer */}
+      <div className="fixed bottom-0 inset-x-0 h-20 bg-white/95 backdrop-blur-md border-t flex items-center justify-around md:hidden z-50 px-4">
+         <button onClick={() => {setView('HOME'); setSelectedCategoryId(null); setSearchQuery('');}} className={`p-3 rounded-2xl flex flex-col items-center gap-1 transition-colors ${view === 'HOME' ? 'text-blue-600' : 'text-gray-400'}`}>
+            <Home className="w-6 h-6" /> <span className="text-[8px] font-black uppercase">الرئيسية</span>
+         </button>
+         <button onClick={() => setShowSaleDialog(true)} className="w-14 h-14 bg-orange-500 text-white rounded-3xl shadow-xl shadow-orange-200 flex items-center justify-center -translate-y-6 border-4 border-[#f8fafc] active:scale-90 transition transform">
+            <ShoppingCart className="w-7 h-7" />
+         </button>
+         <button onClick={() => setView('SALES_LOG')} className={`p-3 rounded-2xl flex flex-col items-center gap-1 transition-colors ${view === 'SALES_LOG' ? 'text-orange-600' : 'text-gray-400'}`}>
+            <History className="w-6 h-6" /> <span className="text-[8px] font-black uppercase">السجل</span>
+         </button>
+      </div>
+    </div>
+  );
+};
+
+export default App;
