@@ -1,122 +1,82 @@
 // db.ts
-const DB_PREFIX = 'NabilInventory_';
-const CLIENT_ID = '193989877512-vekucvd5hbb801cgnsb4nsju1u8gbo4a.apps.googleusercontent.com';
-const SCOPES = 'https://www.googleapis.com/auth/drive.appdata';
 
-let tokenClient: any = null;
+// دالة عامة لحفظ العناصر (الأصناف أو المنتجات)
+export const saveItem = async (storeName: string, item: any): Promise<void> => {
+  return new Promise((resolve, reject) => {
+    // محاكاة أو استخدام IndexedDB
+    const request = indexedDB.open("NabilCloudDB", 1);
 
-// وظيفة لتهيئة طلب التوكن
-export const initTokenClient = (onToken: (token: string) => void) => {
-  if (window.google) {
-    tokenClient = window.google.accounts.oauth2.initTokenClient({
-      client_id: CLIENT_ID,
-      scope: SCOPES,
-      callback: (response: any) => {
-        if (response.access_token) {
-          localStorage.setItem('drive_access_token', response.access_token);
-          onToken(response.access_token);
-        }
-      },
-    });
-  }
+    request.onsuccess = () => {
+      const db = request.result;
+      const transaction = db.transaction(storeName, "readwrite");
+      const store = transaction.objectStore(storeName);
+      
+      // استخدام put للتحديث أو الإضافة
+      const putRequest = store.put(item);
+      
+      putRequest.onsuccess = () => resolve();
+      putRequest.onerror = () => reject("خطأ في حفظ العنصر");
+    };
+
+    request.onerror = () => reject("تعذر فتح قاعدة البيانات");
+  });
 };
 
-export const requestToken = () => {
-  if (tokenClient) tokenClient.requestAccessToken({ prompt: 'consent' });
+// دالة جلب كل العناصر
+export const getAll = async <T>(storeName: string): Promise<T[]> => {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open("NabilCloudDB", 1);
+    
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains('categories')) db.createObjectStore('categories', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('products')) db.createObjectStore('products', { keyPath: 'id' });
+      if (!db.objectStoreNames.contains('sales')) db.createObjectStore('sales', { keyPath: 'id' });
+    };
+
+    request.onsuccess = () => {
+      const db = request.result;
+      const transaction = db.transaction(storeName, "readonly");
+      const store = transaction.objectStore(storeName);
+      const getAllRequest = store.getAll();
+      
+      getAllRequest.onsuccess = () => resolve(getAllRequest.result as T[]);
+      getAllRequest.onerror = () => reject("خطأ في جلب البيانات");
+    };
+  });
 };
 
-// وظيفة جلب البيانات من السحاب
-export const fetchFromCloud = async (): Promise<any | null> => {
-  const token = localStorage.getItem('drive_access_token');
-  if (!token) return null;
-
-  try {
-    // 1. البحث عن ملف النسخة الاحتياطية في المجلد الخاص بالتطبيق
-    const listRes = await fetch(
-      `https://www.googleapis.com/drive/v3/files?q=name='nabil_inventory_backup.json'&spaces=appDataFolder`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-    const list = await listRes.json();
-    const file = list.files?.[0];
-
-    if (!file) return null;
-
-    // 2. تحميل محتوى الملف
-    const contentRes = await fetch(
-      `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-    return await contentRes.json();
-  } catch (error) {
-    console.error("خطأ في التحميل من السحاب:", error);
-    return null;
-  }
+// وظائف المستخدم والإيرادات (المخزنة في LocalStorage للسرعة)
+export const getUser = () => {
+  const user = localStorage.getItem('user');
+  return user ? JSON.parse(user) : null;
 };
 
-// وظيفة المزامنة (الرفع للسحاب)
-export const syncToCloud = async (data: any): Promise<void> => {
-  const token = localStorage.getItem('drive_access_token');
-  if (!token) {
-    requestToken();
-    return;
-  }
+export const saveUser = (user: any) => localStorage.setItem('user', JSON.stringify(user));
 
-  try {
-    const fileName = 'nabil_inventory_backup.json';
-    const listRes = await fetch(
-      `https://www.googleapis.com/drive/v3/files?q=name='${fileName}'&spaces=appDataFolder`,
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
-    const list = await listRes.json();
-    const fileId = list.files?.[0]?.id;
+export const getEarnings = () => Number(localStorage.getItem('earnings') || 0);
 
-    const metadata = { name: fileName, parents: ['appDataFolder'] };
-    const fileData = JSON.stringify(data);
+export const saveEarnings = (amount: number) => localStorage.setItem('earnings', amount.toString());
 
-    if (fileId) {
-      // تحديث ملف موجود
-      await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
-        method: 'PATCH',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: fileData
-      });
-    } else {
-      // إنشاء ملف جديد (Multipart)
-      const boundary = 'foo_bar_baz';
-      const delimiter = `\r\n--${boundary}\r\n`;
-      const close_delim = `\r\n--${boundary}--`;
-      const body = 
-        delimiter + 'Content-Type: application/json; charset=UTF-8\r\n\r\n' + JSON.stringify(metadata) +
-        delimiter + 'Content-Type: application/json\r\n\r\n' + fileData +
-        close_delim;
+// --- دوال Google Drive (تأكد من وجودها لكي لا يعلق App.tsx) ---
+export let initTokenClient: any = null;
+export let requestToken: any = null;
 
-      await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
-        method: 'POST',
-        headers: { 
-          Authorization: `Bearer ${token}`, 
-          'Content-Type': `multipart/related; boundary=${boundary}` 
-        },
-        body
-      });
-    }
-    console.log("✅ تمت المزامنة بنجاح");
-  } catch (error) {
-    console.error("❌ فشلت المزامنة:", error);
-  }
+export const fetchFromCloud = async () => {
+  // هنا يوضع كود جلب البيانات من Google Drive
+  return null; 
 };
 
-// الوظائف المحلية البسيطة
-export const saveUser = (user: any) => localStorage.setItem(DB_PREFIX + 'USER', JSON.stringify(user));
-export const getUser = () => JSON.parse(localStorage.getItem(DB_PREFIX + 'USER') || 'null');
-export const saveEarnings = (val: number) => localStorage.setItem(DB_PREFIX + 'EARNINGS', val.toString());
-export const getEarnings = () => Number(localStorage.getItem(DB_PREFIX + 'EARNINGS') || 0);
+export const syncToCloud = async (data: any) => {
+  // هنا يوضع كود الرفع إلى Google Drive
+  console.log("Syncing to cloud...", data);
+};
 
 export const overwriteLocalData = async (data: any) => {
-  if (data.categories) localStorage.setItem(DB_PREFIX + 'categories', JSON.stringify(data.categories));
-  if (data.products) localStorage.setItem(DB_PREFIX + 'products', JSON.stringify(data.products));
-  if (data.sales) localStorage.setItem(DB_PREFIX + 'sales', JSON.stringify(data.sales));
+  // منطق استبدال البيانات المحلية ببيانات السحاب
 };
 
-export const logoutUser = () => {
+export const logoutUser = async () => {
   localStorage.clear();
+  // إضافة مسح IndexedDB إذا لزم الأمر
 };
