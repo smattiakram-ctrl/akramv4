@@ -5,7 +5,7 @@ import {
   SortAsc
 } from 'lucide-react';
 import { Category, Product, ViewState, User, SaleRecord } from './types';
-import * as db from './db';
+import { supabase } from './supabaseClient';
 import CategoryForm from './components/CategoryForm';
 import ProductForm from './components/ProductForm';
 import BarcodeScanner from './components/BarcodeScanner';
