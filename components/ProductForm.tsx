@@ -3,7 +3,7 @@ import { Product, Category } from '../types';
 import ImagePicker from './ImagePicker';
 import { X, ScanBarcode, Tag, BadgePercent, Loader2 } from 'lucide-react'; // أضفت Loader2 لحالة التحميل
 import BarcodeScanner from './BarcodeScanner';
-import { supabase } from '../supabaseClient'; // استيراد عميل سوبابيس
+import { supabase } from './supabaseClient'; // استيراد عميل سوبابيس
 
 interface ProductFormProps {
   categories: Category[];
