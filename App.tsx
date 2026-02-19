@@ -34,6 +34,7 @@ const App: React.FC = () => {
   const [sortOrder, setSortOrder] = useState<'ASC' | 'DESC'>('ASC');
   const [isLoading, setIsLoading] = useState(true);
 
+  // تحميل البيانات الأولية
   const loadData = useCallback(async () => {
     try {
       const [cats, prods, sLog] = await Promise.all([
@@ -47,7 +48,7 @@ const App: React.FC = () => {
       setSales((sLog || []).sort((a, b) => b.timestamp - a.timestamp));
       setTotalEarnings(db.getEarnings());
     } catch (e) {
-      console.error("خطأ في تحميل البيانات:", e);
+      console.error("خطأ تحميل البيانات:", e);
     } finally {
       setIsLoading(false);
     }
@@ -57,7 +58,7 @@ const App: React.FC = () => {
     loadData();
     const timer = setTimeout(() => {
       if (db.initTokenClient) {
-        db.initTokenClient((token) => {
+        db.initTokenClient(() => {
           handleManualSync();
         });
       }
@@ -101,30 +102,27 @@ const App: React.FC = () => {
     }
   };
 
-  // --- تم إصلاح هذه الدالة لتعمل فوراً ---
+  // --- إصلاح الحفظ مع الحفاظ على التحديث الفوري ---
   const handleAddCategory = async (cat: Category) => {
     await db.saveItem('categories', cat);
     setCategories(prev => {
-      const existing = prev.find(c => c.id === cat.id);
-      if (existing) return prev.map(c => c.id === cat.id ? cat : c);
-      return [...prev, cat];
+      const filtered = prev.filter(c => c.id !== cat.id);
+      return [...filtered, cat];
     });
     setShowCategoryForm(false);
     setEditingCategory(null);
-    handleManualSync(); // مزامنة في الخلفية
+    handleManualSync(); 
   };
 
-  // --- تم إصلاح هذه الدالة لتعمل فوراً ---
   const handleAddProduct = async (prod: Product) => {
     await db.saveItem('products', prod);
     setProducts(prev => {
-      const existing = prev.find(p => p.id === prod.id);
-      if (existing) return prev.map(p => p.id === prod.id ? prod : p);
-      return [...prev, prod];
+      const filtered = prev.filter(p => p.id !== prod.id);
+      return [...filtered, prod];
     });
     setShowProductForm(false);
     setEditingProduct(null);
-    handleManualSync(); // مزامنة في الخلفية
+    handleManualSync();
   };
 
   const handleSale = async (productId: string, qty: number, price: number) => {
@@ -298,41 +296,35 @@ const App: React.FC = () => {
 
              <div className="space-y-6">
                 <h3 className="text-xl font-black text-slate-900">{searchQuery ? 'نتائج البحث' : 'أصناف المخزن'}</h3>
-                {searchQuery ? (
-                  <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
-                    {filteredProducts.map(p => (
-                      <div key={p.id} className="bg-white rounded-[2.5rem] border shadow-sm overflow-hidden flex flex-col group hover:shadow-xl transition-all">
-                        <div className="aspect-square relative overflow-hidden bg-slate-50">
-                          <img src={p.image} className="w-full h-full object-cover group-hover:scale-105 transition-transform" alt="" />
-                          <div className="absolute bottom-3 right-3 bg-blue-600 text-white text-[10px] px-4 py-1.5 rounded-full font-black">{p.quantity} قطعة</div>
-                        </div>
-                        <div className="p-6 flex-1">
-                          <h4 className="font-black text-slate-900 mb-2 truncate text-sm">{p.name}</h4>
-                          <div className="text-xl font-black text-blue-700 mb-6">{p.price.split('/')[0]} <span className="text-[10px]">د.ج</span></div>
-                          <div className="flex gap-2">
-                            <button onClick={() => { setEditingProduct(p); setShowProductForm(true); }} className="p-3 bg-blue-50 text-blue-500 rounded-2xl flex-1 flex justify-center"><Edit className="w-5 h-5" /></button>
-                            <button onClick={(e) => handleDeleteProduct(e, p.id)} className="p-3 bg-red-50 text-red-500 rounded-2xl flex-1 flex justify-center"><Trash2 className="w-5 h-5" /></button>
-                          </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-6">
+                  {searchQuery ? filteredProducts.map(p => (
+                    <div key={p.id} className="bg-white rounded-[2.5rem] border shadow-sm overflow-hidden flex flex-col group hover:shadow-xl transition-all">
+                      <div className="aspect-square relative overflow-hidden bg-slate-50">
+                        <img src={p.image} className="w-full h-full object-cover" alt="" />
+                        <div className="absolute bottom-3 right-3 bg-blue-600 text-white text-[10px] px-4 py-1.5 rounded-full font-black">{p.quantity} قطعة</div>
+                      </div>
+                      <div className="p-6 flex-1">
+                        <h4 className="font-black text-slate-900 mb-2 truncate text-sm">{p.name}</h4>
+                        <div className="text-xl font-black text-blue-700 mb-6">{p.price.split('/')[0]} <span className="text-[10px]">د.ج</span></div>
+                        <div className="flex gap-2">
+                          <button onClick={() => { setEditingProduct(p); setShowProductForm(true); }} className="p-3 bg-blue-50 text-blue-500 rounded-2xl flex-1 flex justify-center"><Edit className="w-5 h-5" /></button>
+                          <button onClick={(e) => handleDeleteProduct(e, p.id)} className="p-3 bg-red-50 text-red-500 rounded-2xl flex-1 flex justify-center"><Trash2 className="w-5 h-5" /></button>
                         </div>
                       </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-6">
-                    {categories.map(c => (
-                      <div key={c.id} className="group bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden hover:shadow-xl transition-all cursor-pointer" onClick={() => { setSelectedCategoryId(c.id); setView('CATEGORY_DETAIL'); }}>
-                        <div className="aspect-square relative overflow-hidden">
-                          <button onClick={(e) => handleDeleteCategory(e, c.id)} className="absolute top-3 left-3 z-10 p-2 bg-red-50/80 backdrop-blur-sm text-red-500 rounded-full opacity-0 group-hover:opacity-100 hover:bg-red-500 hover:text-white transition-all"><Trash2 className="w-4 h-4" /></button>
-                          <img src={c.image} className="w-full h-full object-cover group-hover:scale-110 transition-transform" alt="" />
-                        </div>
-                        <div className="p-5 text-center">
-                          <p className="font-black text-slate-800 text-sm truncate">{c.name}</p>
-                          <p className="text-[10px] text-slate-400 font-bold mt-1">{products.filter(p => p.categoryId === c.id).length} سلع</p>
-                        </div>
+                    </div>
+                  )) : categories.map(c => (
+                    <div key={c.id} className="group bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden hover:shadow-xl transition-all cursor-pointer" onClick={() => { setSelectedCategoryId(c.id); setView('CATEGORY_DETAIL'); }}>
+                      <div className="aspect-square relative overflow-hidden">
+                        <button onClick={(e) => handleDeleteCategory(e, c.id)} className="absolute top-3 left-3 z-10 p-2 bg-red-50/80 backdrop-blur-sm text-red-500 rounded-full opacity-0 group-hover:opacity-100 hover:bg-red-500 hover:text-white transition-all"><Trash2 className="w-4 h-4" /></button>
+                        <img src={c.image} className="w-full h-full object-cover group-hover:scale-110 transition-transform" alt="" />
                       </div>
-                    ))}
-                  </div>
-                )}
+                      <div className="p-5 text-center">
+                        <p className="font-black text-slate-800 text-sm truncate">{c.name}</p>
+                        <p className="text-[10px] text-slate-400 font-bold mt-1">{products.filter(p => p.categoryId === c.id).length} سلع</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
              </div>
           </div>
         )}
@@ -359,8 +351,13 @@ const App: React.FC = () => {
         )}
 
         {view === 'CATEGORY_DETAIL' && (
-          <div className="space-y-8 animate-in fade-in duration-500">
+          <div className="space-y-8">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-4">
                 <button onClick={() => { setView('HOME'); setSelectedCategoryId(null); }} className="p-3 bg-white rounded-2xl shadow-sm"><ChevronLeft className="w-6 h-6 rotate-180" /></button>
-  
+                <h2 className="text-2xl font-black text-slate-900">{categories.find(c => c.id === selectedCategoryId)?.name}</h2>
+              </div>
+              <button onClick={() => setSortOrder(prev => prev === 'ASC' ? 'DESC' : 'ASC')} className="p-4 bg-white rounded-2xl border text-slate-600"><SortAsc className={`w-6 h-6 ${sortOrder === 'DESC' ? 'rotate-180' : ''}`} /></button>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-6">
+              {filtered
