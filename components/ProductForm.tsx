@@ -1,9 +1,9 @@
-
 import React, { useState, useEffect } from 'react';
 import { Product, Category } from '../types';
 import ImagePicker from './ImagePicker';
-import { X, ScanBarcode, Tag, BadgePercent } from 'lucide-react';
+import { X, ScanBarcode, Tag, BadgePercent, Loader2 } from 'lucide-react'; // أضفت Loader2 لحالة التحميل
 import BarcodeScanner from './BarcodeScanner';
+import { supabase } from '../supabaseClient'; // استيراد عميل سوبابيس
 
 interface ProductFormProps {
   categories: Category[];
@@ -20,7 +20,6 @@ const ProductForm: React.FC<ProductFormProps> = ({
   initialData, 
   defaultCategoryId 
 }) => {
-  // تحليل السعر الأولي إذا كان موجوداً (تفصيل/جملة)
   const initialRetail = initialData?.price.split('/')[0] || '';
   const initialWholesale = initialData?.price.split('/')[1] || '';
 
@@ -32,6 +31,41 @@ const ProductForm: React.FC<ProductFormProps> = ({
   const [barcode, setBarcode] = useState(initialData?.barcode || '');
   const [image, setImage] = useState(initialData?.image || '');
   const [isScanning, setIsScanning] = useState(false);
+  const [isUploading, setIsUploading] = useState(false); // حالة تحميل جديدة
+
+  // دالة التعامل مع الصورة المختارة
+  const handleImageChange = async (imageInput: string | File) => {
+    if (typeof imageInput === 'string') {
+      setImage(imageInput);
+      return;
+    }
+
+    // إذا تم اختيار ملف فعلي، نقوم برفعه فوراً
+    try {
+      setIsUploading(true);
+      const file = imageInput;
+      const fileExt = file.name.split('.').pop();
+      const fileName = `${Date.now()}.${fileExt}`;
+      const filePath = `${fileName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('uploads')
+        .upload(filePath, file);
+
+      if (uploadError) throw uploadError;
+
+      const { data } = supabase.storage
+        .from('uploads')
+        .getPublicUrl(filePath);
+
+      setImage(data.publicUrl);
+    } catch (error) {
+      alert('فشل رفع الصورة للسحاب');
+      console.error(error);
+    } finally {
+      setIsUploading(false);
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -40,7 +74,6 @@ const ProductForm: React.FC<ProductFormProps> = ({
       return;
     }
 
-    // دمج السعرين في نص واحد: تفصيل/جملة
     const finalPrice = wholesalePrice ? `${retailPrice}/${wholesalePrice}` : retailPrice;
 
     onSave({
@@ -80,7 +113,14 @@ const ProductForm: React.FC<ProductFormProps> = ({
         <form onSubmit={handleSubmit} className="space-y-5">
           <div className="space-y-2">
             <label className="block text-sm font-bold text-gray-700">صورة المنتج</label>
-            <ImagePicker onImageSelected={setImage} initialImage={image} />
+            <div className="relative">
+              <ImagePicker onImageSelected={handleImageChange} initialImage={image} />
+              {isUploading && (
+                <div className="absolute inset-0 bg-white/60 backdrop-blur-[2px] rounded-3xl flex items-center justify-center z-10">
+                   <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="space-y-2">
@@ -172,9 +212,10 @@ const ProductForm: React.FC<ProductFormProps> = ({
           <div className="flex flex-col gap-3 pt-2">
             <button 
               type="submit"
-              className="w-full py-4 bg-green-600 text-white rounded-2xl font-black text-lg hover:bg-green-700 transition shadow-xl shadow-green-100 active:scale-[0.98]"
+              disabled={isUploading}
+              className="w-full py-4 bg-green-600 text-white rounded-2xl font-black text-lg hover:bg-green-700 transition shadow-xl shadow-green-100 active:scale-[0.98] disabled:opacity-50"
             >
-              {initialData ? 'تحديث البيانات' : 'حفظ السلعة'}
+              {isUploading ? 'جاري رفع الصورة...' : initialData ? 'تحديث البيانات' : 'حفظ السلعة'}
             </button>
             <button 
               type="button"
