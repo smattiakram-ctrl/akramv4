@@ -101,30 +101,25 @@ const App: React.FC = () => {
     }
   };
 
-  const handleAddCategory = async (cat: Category) => {
-    await db.saveItem('categories', cat);
-    setCategories(prev => {
-      const existing = prev.find(c => c.id === cat.id);
-      if (existing) return prev.map(c => c.id === cat.id ? cat : c);
-      return [...prev, cat];
-    });
-    setShowCategoryForm(false);
-    setEditingCategory(null);
-    handleManualSync();
-  };
-
   const handleAddProduct = async (prod: Product) => {
-    await db.saveItem('products', prod);
-    setProducts(prev => {
-      const existing = prev.find(p => p.id === prod.id);
-      if (existing) return prev.map(p => p.id === prod.id ? prod : p);
-      return [...prev, prod];
-    });
-    setShowProductForm(false);
-    setEditingProduct(null);
-    handleManualSync();
-  };
+    try {
+      // 1. تحديث القائمة فوراً في الشاشة
+      setProducts(prev => {
+        const filtered = prev.filter(p => p.id !== prod.id);
+        return [...filtered, prod];
+      });
 
+      // 2. إغلاق النافذة فوراً
+      setShowProductForm(false);
+      setEditingProduct(null);
+
+      // 3. الحفظ في قاعدة البيانات والمزامنة في الخلفية
+      await db.saveItem('products', prod);
+      handleManualSync();
+    } catch (error) {
+      console.error("خطأ في الحفظ:", error);
+    }
+  };
   const handleSale = async (productId: string, qty: number, price: number) => {
     const product = products.find(p => p.id === productId);
     if (!product) return;
@@ -138,7 +133,29 @@ const App: React.FC = () => {
       timestamp: Date.now()
     };
     await db.saveItem('sales', sale);
-    const newEarnings = totalEarnings + (price * qty);
+    const newEarnings = totalEarnings + (pric  const handleAddCategory = async (cat: Category) => {
+    try {
+      // حفظ في القائمة المحلية فوراً لتظهر للمستخدم
+      setCategories(prev => {
+        const filtered = prev.filter(c => c.id !== cat.id);
+        return [...filtered, cat];
+      });
+      
+      // حفظ في قاعدة البيانات (IndexedDB)
+      await db.saveItem('categories', cat);
+      
+      // إغلاق النافذة
+      setShowCategoryForm(false);
+      setEditingCategory(null);
+
+      // تشغيل المزامنة مع السحاب في الخلفية
+      handleManualSync();
+    } catch (error) {
+      console.error("خطأ أثناء حفظ الصنف:", error);
+      alert("تعذر الحفظ، يرجى المحاولة مرة أخرى");
+    }
+  };
+e * qty);
     db.saveEarnings(newEarnings);
     setTotalEarnings(newEarnings);
     setSales(prev => [sale, ...prev]);
